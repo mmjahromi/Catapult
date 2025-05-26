@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Artillery Duel</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="game-container">
+        <div id="mode-selection">
+            <h2>Select Game Mode</h2>
+            <button id="two-player">2 Players</button>
+            <button id="vs-computer">Play Against Computer</button>
+        </div>
+        <canvas id="gameCanvas"></canvas>
+        <div id="controls">
+            <div class="control-group">
+                <label for="angle">Set Angle (°):</label>
+                <input type="number" id="angle" value="45" min="0" max="90" placeholder="Enter Angle">
+            </div>
+            <div class="control-group">
+                <label for="power">Set Power:</label>
+                <input type="number" id="power" value="50" min="10" max="100" placeholder="Enter Power">
+            </div>
+            <button id="fire">Fire!</button>
+        </div>
+        <p id="turn">Player 1's Turn</p>
+    </div>
+    <script src="script.js"></script>
+</body>
+</html>
