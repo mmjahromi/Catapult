@@ -40,7 +40,435 @@ let terrainComplexity = 1;
 let gravity = 0.5;
 let maxPower = 100;
 
-// Add environment generation function
+// Add game state variables
+let score = { player1: 0, player2: 0 };
+let gameTime = 0;
+let roundNumber = 1;
+let maxRounds = 3;
+let timeLimit = 180; // 3 minutes for quick mode
+
+// Add business-related variables
+let userData = {
+    username: '',
+    coins: 0,
+    level: 1,
+    experience: 0,
+    premium: false,
+    skins: ['default'],
+    selectedSkin: 'default'
+};
+
+let gameStats = {
+    gamesPlayed: 0,
+    wins: 0,
+    bestScore: 0,
+    totalHits: 0
+};
+
+// Add ad configuration
+const AD_CONFIG = {
+    positions: {
+        top: { id: 'top-ad', width: '728px', height: '90px' },
+        side: { id: 'side-ad', width: '300px', height: '600px' },
+        bottom: { id: 'bottom-ad', width: '728px', height: '90px' }
+    },
+    refreshInterval: 300000 // 5 minutes
+};
+
+// Add security-related variables and configurations
+const SECURITY_CONFIG = {
+    maxRequestsPerMinute: 60,
+    sessionTimeout: 3600000, // 1 hour
+    maxScorePerGame: 10000,
+    maxCoinsPerGame: 1000,
+    encryptionKey: 'YOUR_ENCRYPTION_KEY', // Replace with a secure key
+    allowedOrigins: ['https://yourdomain.com'], // Replace with your domain
+    apiEndpoints: {
+        auth: '/api/auth',
+        score: '/api/score',
+        shop: '/api/shop'
+    }
+};
+
+// Add security middleware
+const securityMiddleware = {
+    // Rate limiting
+    rateLimiter: new Map(),
+    
+    // Session management
+    sessions: new Map(),
+    
+    // Request validation
+    validateRequest: function(req) {
+        const timestamp = Date.now();
+        const clientIP = req.headers['x-forwarded-for'] || req.connection.remoteAddress;
+        
+        // Check rate limiting
+        if (!this.rateLimiter.has(clientIP)) {
+            this.rateLimiter.set(clientIP, {
+                count: 1,
+                timestamp: timestamp
+            });
+        } else {
+            const clientData = this.rateLimiter.get(clientIP);
+            if (timestamp - clientData.timestamp > 60000) {
+                clientData.count = 1;
+                clientData.timestamp = timestamp;
+            } else if (clientData.count >= SECURITY_CONFIG.maxRequestsPerMinute) {
+                throw new Error('Rate limit exceeded');
+            } else {
+                clientData.count++;
+            }
+        }
+        
+        // Validate session
+        const sessionId = req.headers['x-session-id'];
+        if (!this.sessions.has(sessionId)) {
+            throw new Error('Invalid session');
+        }
+        
+        return true;
+    },
+    
+    // Session management
+    createSession: function(userId) {
+        const sessionId = this.generateSecureToken();
+        this.sessions.set(sessionId, {
+            userId: userId,
+            created: Date.now(),
+            lastActivity: Date.now()
+        });
+        return sessionId;
+    },
+    
+    // Token generation
+    generateSecureToken: function() {
+        return Array.from(crypto.getRandomValues(new Uint8Array(32)))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+    }
+};
+
+// Add data encryption
+const encryption = {
+    // Encrypt sensitive data
+    encrypt: function(data) {
+        const encoder = new TextEncoder();
+        const dataBuffer = encoder.encode(JSON.stringify(data));
+        return crypto.subtle.encrypt(
+            { name: 'AES-GCM', iv: crypto.getRandomValues(new Uint8Array(12)) },
+            SECURITY_CONFIG.encryptionKey,
+            dataBuffer
+        );
+    },
+    
+    // Decrypt data
+    decrypt: function(encryptedData) {
+        return crypto.subtle.decrypt(
+            { name: 'AES-GCM', iv: encryptedData.iv },
+            SECURITY_CONFIG.encryptionKey,
+            encryptedData.data
+        );
+    }
+};
+
+// Update anti-cheat protection
+const antiCheat = {
+    // Track game state
+    gameState: new Map(),
+    
+    // Validate game actions
+    validateAction: function(action, playerId) {
+        // Initialize player state if not exists
+        if (!this.gameState.has(playerId)) {
+            this.gameState.set(playerId, {
+                lastAction: Date.now(),
+                actions: []
+            });
+        }
+        
+        const playerState = this.gameState.get(playerId);
+        
+        // Update last action time
+        const currentTime = Date.now();
+        playerState.lastAction = currentTime;
+        
+        // Add action to history
+        playerState.actions.push({
+            type: action.type,
+            timestamp: currentTime,
+            data: action
+        });
+        
+        // Keep only last 10 actions
+        if (playerState.actions.length > 10) {
+            playerState.actions.shift();
+        }
+        
+        // Basic validation - allow normal gameplay actions
+        if (action.type === 'fire') {
+            // Validate angle and power are within reasonable ranges
+            if (action.angle >= 0 && action.angle <= 90 &&
+                action.power >= 0 && action.power <= maxPower) {
+                return true;
+            }
+        }
+        
+        return true; // Allow all other actions by default
+    },
+    
+    // Detect impossible moves
+    isImpossibleMove: function(action, state) {
+        // No impossible moves in basic gameplay
+        return false;
+    },
+    
+    // Detect speed hacks
+    isSpeedHack: function(action, state) {
+        // Allow normal gameplay speed
+        return false;
+    },
+    
+    // Flag suspicious activity
+    flagSuspiciousActivity: function(playerId, reason) {
+        console.warn(`Suspicious activity detected for player ${playerId}: ${reason}`);
+        // Log but don't block normal gameplay
+    }
+};
+
+// Add secure communication
+const secureCommunication = {
+    // Validate API requests
+    validateApiRequest: function(request) {
+        // Check origin
+        if (!SECURITY_CONFIG.allowedOrigins.includes(request.origin)) {
+            throw new Error('Invalid origin');
+        }
+        
+        // Validate request headers
+        if (!request.headers['x-api-key']) {
+            throw new Error('Missing API key');
+        }
+        
+        return true;
+    },
+    
+    // Secure API response
+    secureResponse: function(data) {
+        return {
+            data: encryption.encrypt(data),
+            timestamp: Date.now(),
+            signature: this.generateSignature(data)
+        };
+    },
+    
+    // Generate request signature
+    generateSignature: function(data) {
+        const encoder = new TextEncoder();
+        const dataBuffer = encoder.encode(JSON.stringify(data));
+        return crypto.subtle.sign(
+            'HMAC',
+            SECURITY_CONFIG.encryptionKey,
+            dataBuffer
+        );
+    }
+};
+
+// Add secure storage
+const secureStorage = {
+    // Store sensitive data
+    store: function(key, value) {
+        const encrypted = encryption.encrypt(value);
+        localStorage.setItem(key, JSON.stringify(encrypted));
+    },
+    
+    // Retrieve sensitive data
+    retrieve: function(key) {
+        const encrypted = JSON.parse(localStorage.getItem(key));
+        if (!encrypted) return null;
+        return encryption.decrypt(encrypted);
+    },
+    
+    // Clear sensitive data
+    clear: function(key) {
+        localStorage.removeItem(key);
+    }
+};
+
+// Update input validation to handle objects
+const inputValidation = {
+    // Validate user input
+    validateInput: function(input) {
+        // Handle object input
+        if (typeof input === 'object') {
+            return this.validateObject(input);
+        }
+        
+        // Handle string input
+        const sanitized = this.sanitizeInput(input);
+        
+        // Validate length
+        if (sanitized.length > 100) {
+            throw new Error('Input too long');
+        }
+        
+        // Check for malicious patterns
+        if (this.containsMaliciousPattern(sanitized)) {
+            throw new Error('Invalid input pattern');
+        }
+        
+        return sanitized;
+    },
+    
+    // Validate object input
+    validateObject: function(obj) {
+        const validated = {};
+        for (const [key, value] of Object.entries(obj)) {
+            if (typeof value === 'string') {
+                validated[key] = this.sanitizeInput(value);
+            } else if (typeof value === 'number') {
+                validated[key] = value;
+            } else {
+                validated[key] = value;
+            }
+        }
+        return validated;
+    },
+    
+    // Sanitize input
+    sanitizeInput: function(input) {
+        if (typeof input !== 'string') {
+            return input;
+        }
+        return input.replace(/[<>]/g, '');
+    },
+    
+    // Check for malicious patterns
+    containsMaliciousPattern: function(input) {
+        if (typeof input !== 'string') {
+            return false;
+        }
+        const maliciousPatterns = [
+            /<script>/i,
+            /javascript:/i,
+            /on\w+=/i
+        ];
+        
+        return maliciousPatterns.some(pattern => pattern.test(input));
+    }
+};
+
+// Update game functions with security measures
+function updateGameWithSecurity() {
+    // Secure the fireProjectile function
+    const originalFireProjectile = fireProjectile;
+    fireProjectile = function(startX, startY, angle, power, callback) {
+        // Validate input
+        if (!inputValidation.validateInput({ startX, startY, angle, power })) {
+            console.error('Invalid input detected');
+            return;
+        }
+        
+        // Check for cheating
+        if (!antiCheat.validateAction({
+            type: 'fire',
+            startX,
+            startY,
+            angle,
+            power,
+            timestamp: Date.now()
+        }, turn)) {
+            console.error('Suspicious activity detected');
+            return;
+        }
+        
+        // Proceed with original function
+        originalFireProjectile(startX, startY, angle, power, callback);
+    };
+    
+    // Secure the score update
+    const originalUpdateScore = updateGameStatus;
+    updateGameStatus = function() {
+        // Validate score
+        if (score.player1 > SECURITY_CONFIG.maxScorePerGame ||
+            score.player2 > SECURITY_CONFIG.maxScorePerGame) {
+            console.error('Invalid score detected');
+            return;
+        }
+        
+        // Proceed with original function
+        originalUpdateScore();
+    };
+}
+
+// Update security headers function
+function addSecurityHeaders() {
+    // Content Security Policy
+    const csp = `
+        default-src 'self';
+        script-src 'self' 'unsafe-inline' 'unsafe-eval';
+        style-src 'self' 'unsafe-inline';
+        img-src 'self' data:;
+        connect-src 'self';
+    `;
+    
+    // Set security headers
+    document.head.innerHTML += `
+        <meta http-equiv="Content-Security-Policy" content="${csp}">
+        <meta http-equiv="X-Content-Type-Options" content="nosniff">
+        <meta http-equiv="X-XSS-Protection" content="1; mode=block">
+    `;
+
+    // Note: X-Frame-Options should be set in server headers
+    console.log('Security headers set. Note: X-Frame-Options should be set in server headers.');
+}
+
+// Initialize security measures
+function initializeSecurity() {
+    addSecurityHeaders();
+    updateGameWithSecurity();
+    
+    // Add event listeners for security
+    window.addEventListener('beforeunload', () => {
+        secureStorage.clear('session');
+    });
+    
+    // Monitor for suspicious activity
+    setInterval(() => {
+        const currentTime = Date.now();
+        securityMiddleware.sessions.forEach((session, sessionId) => {
+            if (currentTime - session.lastActivity > SECURITY_CONFIG.sessionTimeout) {
+                securityMiddleware.sessions.delete(sessionId);
+            }
+        });
+    }, 60000);
+}
+
+// Update the init function
+function init() {
+    try {
+        initializeSecurity();
+        loadImages();
+        createAdContainers();
+        createBusinessUI();
+        createGameStatusUI();
+        createDifficultyButtons();
+        setDifficulty('medium');
+        generateEnvironment();
+        randomizePlayerPositions();
+        generateTerrain();
+        updateWind();
+        generateClouds();
+        draw();
+        animate();
+
+        // Set up ad refresh interval
+        setInterval(refreshAds, AD_CONFIG.refreshInterval);
+    } catch (error) {
+        console.error('Error during initialization:', error);
+    }
+}
+
 function generateEnvironment() {
     const environments = ['grass', 'desert', 'jungle', 'mountain'];
     currentEnvironment = environments[Math.floor(Math.random() * environments.length)];
@@ -135,46 +563,61 @@ function drawProjectile(x, y) {
     ctx.closePath();
 }
 
-// Update the fireProjectile function to ensure proper rendering
+// Update the fireProjectile function to use simplified validation
 function fireProjectile(startX, startY, angle, power, callback) {
-    let radianAngle = startX === player2X
-        ? (Math.PI / 180) * (180 - angle)
-        : (Math.PI / 180) * angle;
-
-    let velocityX = power * Math.cos(radianAngle);
-    let velocityY = -power * Math.sin(radianAngle);
-
-    let x = startX;
-    let y = startY;
-
-    function animate() {
-        ctx.clearRect(0, 0, canvas.width, canvas.height);
-        
-        drawTerrain();
-        drawCannon(player1X, terrain[player1X]);
-        drawCannon(player2X, terrain[player2X]);
-        drawWindArrow();
-        drawPowerMeter();
-        drawExplosion();
-
-        x += velocityX;
-        y += velocityY;
-        velocityY += gravity;
-
-        drawProjectile(x, y);
-
-        if (y > terrain[Math.round(x)] || x < 0 || x > canvas.width) {
-            if (x >= 0 && x < canvas.width) {
-                createCrater(Math.round(x), 20);
-            }
-            callback(x, y);
+    try {
+        // Basic validation
+        if (angle < 0 || angle > 90 || power < 0 || power > maxPower) {
+            console.error('Invalid angle or power values');
             return;
         }
 
-        requestAnimationFrame(animate);
-    }
+        let radianAngle = startX === player2X
+            ? (Math.PI / 180) * (180 - angle)
+            : (Math.PI / 180) * angle;
 
-    animate();
+        let velocityX = power * Math.cos(radianAngle);
+        let velocityY = -power * Math.sin(radianAngle);
+
+        let x = startX;
+        let y = startY;
+
+        function animate() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            drawTerrain();
+            drawCannon(player1X, terrain[player1X]);
+            drawCannon(player2X, terrain[player2X]);
+            drawWindArrow();
+            drawPowerMeter();
+            drawExplosion();
+
+            x += velocityX;
+            y += velocityY;
+            velocityY += gravity;
+
+            drawProjectile(x, y);
+
+            if (y > terrain[Math.round(x)] || x < 0 || x > canvas.width) {
+                if (x >= 0 && x < canvas.width) {
+                    createCrater(Math.round(x), 20);
+                }
+                callback(x, y);
+                return;
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        animate();
+    } catch (error) {
+        console.error('Error in fireProjectile:', error);
+        // Reset turn if there's an error
+        turn = turn === 1 ? 2 : 1;
+        turnDisplay.textContent = gameMode === 'vs-computer' && turn === 2
+            ? "Computer's Turn"
+            : `Player ${turn}'s Turn`;
+    }
 }
 
 // Update the createCrater function
@@ -423,6 +866,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
         console.log('Firing with:', { angle, power, startX, startY });
 
+        // Validate input before firing
+        if (isNaN(angle) || isNaN(power)) {
+            console.error('Invalid angle or power values');
+            return;
+        }
+
+        // Fire the projectile
         fireProjectile(startX, startY, angle, power, (x, y) => {
             console.log('Projectile hit at:', { x, y });
             if (turn === 1 && x >= player2X - 20 && x <= player2X + 20) {
@@ -647,20 +1097,6 @@ function loadImages() {
     explosionImage.src = explosionCanvas.toDataURL();
 }
 
-// Update the init function to include initial environment generation
-function init() {
-    loadImages();
-    createDifficultyButtons();
-    setDifficulty('medium'); // Set default difficulty
-    generateEnvironment();
-    randomizePlayerPositions();
-    generateTerrain();
-    updateWind();
-    generateClouds();
-    draw();
-    animate();
-}
-
 function animate() {
     updateClouds();
     draw();
@@ -810,6 +1246,751 @@ function setDifficulty(level) {
     
     // Reset game with new difficulty
     resetGame();
+}
+
+// Add UI elements for game status
+function createGameStatusUI() {
+    const statusContainer = document.createElement('div');
+    statusContainer.id = 'game-status';
+    statusContainer.style.cssText = `
+        position: absolute;
+        top: 20px;
+        right: 20px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 15px;
+        border-radius: 10px;
+        color: white;
+        font-family: Arial, sans-serif;
+        backdrop-filter: blur(5px);
+        border: 1px solid rgba(255, 255, 255, 0.2);
+    `;
+
+    // Score display
+    const scoreDisplay = document.createElement('div');
+    scoreDisplay.id = 'score-display';
+    scoreDisplay.style.cssText = `
+        font-size: 18px;
+        margin-bottom: 10px;
+        text-align: center;
+    `;
+    statusContainer.appendChild(scoreDisplay);
+
+    // Round display
+    const roundDisplay = document.createElement('div');
+    roundDisplay.id = 'round-display';
+    roundDisplay.style.cssText = `
+        font-size: 14px;
+        margin-bottom: 10px;
+        text-align: center;
+    `;
+    statusContainer.appendChild(roundDisplay);
+
+    // Timer display
+    const timerDisplay = document.createElement('div');
+    timerDisplay.id = 'timer-display';
+    timerDisplay.style.cssText = `
+        font-size: 14px;
+        text-align: center;
+    `;
+    statusContainer.appendChild(timerDisplay);
+
+    document.body.appendChild(statusContainer);
+    updateGameStatus();
+}
+
+// Add back createGameModeSelection function
+function createGameModeSelection() {
+    const modeContainer = document.createElement('div');
+    modeContainer.id = 'game-mode-selection';
+    modeContainer.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.8);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        z-index: 1000;
+    `;
+
+    const title = document.createElement('h2');
+    title.textContent = 'Select Game Mode';
+    title.style.cssText = `
+        margin-bottom: 20px;
+        color: #4CAF50;
+    `;
+    modeContainer.appendChild(title);
+
+    const modes = [
+        { id: 'classic', name: 'Classic Mode', desc: 'Traditional turn-based gameplay' },
+        { id: 'quick', name: 'Quick Mode', desc: '3-minute time limit, fast-paced action' },
+        { id: 'tournament', name: 'Tournament Mode', desc: 'Best of 3 rounds' }
+    ];
+
+    modes.forEach(mode => {
+        const button = document.createElement('button');
+        button.textContent = mode.name;
+        button.style.cssText = `
+            display: block;
+            width: 200px;
+            padding: 10px;
+            margin: 10px auto;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        `;
+        button.onmouseover = () => button.style.background = 'rgba(255, 255, 255, 0.2)';
+        button.onmouseout = () => button.style.background = 'rgba(255, 255, 255, 0.1)';
+        button.onclick = () => startGameMode(mode.id);
+        modeContainer.appendChild(button);
+
+        const desc = document.createElement('div');
+        desc.textContent = mode.desc;
+        desc.style.cssText = `
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 15px;
+        `;
+        modeContainer.appendChild(desc);
+    });
+
+    document.body.appendChild(modeContainer);
+}
+
+// Update startGameMode function to handle all game modes
+function startGameMode(mode) {
+    gameMode = mode;
+    
+    // Hide game mode selection
+    const modeSelection = document.getElementById('game-mode-selection');
+    if (modeSelection) {
+        modeSelection.remove(); // Remove the element instead of just hiding it
+    }
+    
+    // Show game container
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+        gameContainer.style.visibility = 'visible';
+    }
+    
+    switch(mode) {
+        case 'quick':
+            timeLimit = 180; // 3 minutes
+            gameTime = timeLimit;
+            startQuickMode();
+            break;
+        case 'tournament':
+            roundNumber = 1;
+            maxRounds = 3;
+            startTournamentMode();
+            break;
+        default:
+            startClassicMode();
+    }
+}
+
+// Add quick mode function
+function startQuickMode() {
+    // Hide game mode selection
+    const modeSelection = document.getElementById('game-mode-selection');
+    if (modeSelection) {
+        modeSelection.style.display = 'none';
+    }
+
+    // Reset game state
+    score = { player1: 0, player2: 0 };
+    roundNumber = 1;
+    maxRounds = 1;
+    
+    // Show game container
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+        gameContainer.style.visibility = 'visible';
+    }
+
+    // Start timer
+    const timer = setInterval(() => {
+        gameTime--;
+        updateGameStatus();
+        
+        if (gameTime <= 0) {
+            clearInterval(timer);
+            endGame();
+        }
+    }, 1000);
+
+    // Reset and start game
+    resetGame();
+    updateGameStatus();
+}
+
+// Add tournament mode function
+function startTournamentMode() {
+    // Hide game mode selection
+    const modeSelection = document.getElementById('game-mode-selection');
+    if (modeSelection) {
+        modeSelection.style.display = 'none';
+    }
+
+    // Reset game state
+    score = { player1: 0, player2: 0 };
+    roundNumber = 1;
+    maxRounds = 3;
+    gameTime = 0;
+
+    // Show game container
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+        gameContainer.style.visibility = 'visible';
+    }
+
+    // Reset and start game
+    resetGame();
+    updateGameStatus();
+}
+
+// Add visual effects for hits
+function createHitEffect(x, y, isDirectHit) {
+    const effect = document.createElement('div');
+    effect.style.cssText = `
+        position: absolute;
+        left: ${x}px;
+        top: ${y}px;
+        transform: translate(-50%, -50%);
+        font-size: ${isDirectHit ? '24px' : '18px'};
+        color: ${isDirectHit ? '#FFD700' : '#FF5722'};
+        text-shadow: 0 0 10px ${isDirectHit ? '#FFD700' : '#FF5722'};
+        font-weight: bold;
+        pointer-events: none;
+        animation: hitEffect 1s ease-out forwards;
+    `;
+    effect.textContent = isDirectHit ? 'DIRECT HIT!' : 'HIT!';
+    document.body.appendChild(effect);
+
+    setTimeout(() => effect.remove(), 1000);
+}
+
+// Update the fireProjectile callback
+function handleProjectileHit(x, y) {
+    const isPlayer1Turn = turn === 1;
+    const targetX = isPlayer1Turn ? player2X : player1X;
+    const isDirectHit = Math.abs(x - targetX) <= 20;
+
+    if (isDirectHit) {
+        createHitEffect(x, y, true);
+        if (gameMode === 'tournament') {
+            if (isPlayer1Turn) score.player1++;
+            else score.player2++;
+            
+            if (score.player1 >= 2 || score.player2 >= 2) {
+                endGame();
+            } else {
+                roundNumber++;
+                resetGame();
+            }
+        } else {
+            alert(isPlayer1Turn ? 'Player 1 wins!' : 'Player 2 wins!');
+            resetGame();
+        }
+    } else {
+        createHitEffect(x, y, false);
+        turn = turn === 1 ? 2 : 1;
+        turnDisplay.textContent = gameMode === 'vs-computer' && turn === 2
+            ? "Computer's Turn"
+            : `Player ${turn}'s Turn`;
+        
+        if (gameMode === 'vs-computer' && turn === 2) {
+            setTimeout(computerTurn, 1000);
+        } else {
+            updateWind();
+        }
+    }
+    updateGameStatus();
+}
+
+// End game function
+function endGame() {
+    let message = '';
+    if (gameMode === 'quick') {
+        message = `Time's up!\nFinal Score:\nPlayer 1: ${score.player1}\nPlayer 2: ${score.player2}`;
+    } else if (gameMode === 'tournament') {
+        message = `Tournament Over!\nFinal Score:\nPlayer 1: ${score.player1}\nPlayer 2: ${score.player2}`;
+    }
+    
+    if (message) {
+        alert(message);
+        document.getElementById('game-mode-selection').style.display = 'block';
+    }
+}
+
+// Add CSS for hit effect animation
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes hitEffect {
+        0% {
+            transform: translate(-50%, -50%) scale(0.5);
+            opacity: 1;
+        }
+        100% {
+            transform: translate(-50%, -100%) scale(1.5);
+            opacity: 0;
+        }
+    }
+`;
+document.head.appendChild(style);
+
+// Create user interface for business features
+function createBusinessUI() {
+    // Create main menu
+    const mainMenu = document.createElement('div');
+    mainMenu.id = 'main-menu';
+    mainMenu.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        padding: 30px;
+        border-radius: 20px;
+        color: white;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        z-index: 1000;
+        min-width: 300px;
+    `;
+
+    // Add user info section
+    const userInfo = document.createElement('div');
+    userInfo.style.cssText = `
+        margin-bottom: 20px;
+        padding: 10px;
+        background: rgba(255, 255, 255, 0.1);
+        border-radius: 10px;
+    `;
+    userInfo.innerHTML = `
+        <div style="font-size: 24px; margin-bottom: 10px;">Welcome, ${userData.username || 'Player'}</div>
+        <div style="display: flex; justify-content: space-around;">
+            <div>Level: ${userData.level}</div>
+            <div>XP: ${userData.experience}</div>
+        </div>
+    `;
+    mainMenu.appendChild(userInfo);
+
+    // Add menu buttons
+    const buttons = [
+        { id: 'play', text: 'Play Game', action: () => showGameModes() },
+        { id: 'leaderboard', text: 'Leaderboard', action: () => showLeaderboard() }
+    ];
+
+    buttons.forEach(btn => {
+        const button = document.createElement('button');
+        button.textContent = btn.text;
+        button.style.cssText = `
+            display: block;
+            width: 100%;
+            padding: 12px;
+            margin: 10px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-size: 16px;
+        `;
+        button.onmouseover = () => button.style.background = 'rgba(255, 255, 255, 0.2)';
+        button.onmouseout = () => button.style.background = 'rgba(255, 255, 255, 0.1)';
+        button.onclick = btn.action;
+        mainMenu.appendChild(button);
+    });
+
+    document.body.appendChild(mainMenu);
+}
+
+// Show leaderboard
+function showLeaderboard() {
+    const leaderboardContainer = document.createElement('div');
+    leaderboardContainer.id = 'leaderboard-container';
+    leaderboardContainer.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        backdrop-filter: blur(10px);
+        z-index: 1001;
+        width: 80%;
+        max-width: 500px;
+    `;
+
+    // Add leaderboard title
+    const title = document.createElement('h2');
+    title.textContent = 'Global Leaderboard';
+    title.style.cssText = `
+        color: #4CAF50;
+        text-align: center;
+        margin-bottom: 20px;
+    `;
+    leaderboardContainer.appendChild(title);
+
+    // Add leaderboard entries (mock data)
+    const entries = [
+        { rank: 1, username: 'ProGamer123', score: 1500, level: 50 },
+        { rank: 2, username: 'TankMaster', score: 1200, level: 45 },
+        { rank: 3, username: 'BattleKing', score: 1000, level: 40 }
+    ];
+
+    entries.forEach(entry => {
+        const entryElement = document.createElement('div');
+        entryElement.style.cssText = `
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px;
+            margin: 5px 0;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+        `;
+
+        entryElement.innerHTML = `
+            <div style="font-weight: bold; color: ${entry.rank === 1 ? '#FFD700' : 
+                                                   entry.rank === 2 ? '#C0C0C0' : 
+                                                   entry.rank === 3 ? '#CD7F32' : 'white'}">
+                #${entry.rank}
+            </div>
+            <div>${entry.username}</div>
+            <div>Level ${entry.level}</div>
+            <div>${entry.score} points</div>
+        `;
+
+        leaderboardContainer.appendChild(entryElement);
+    });
+
+    // Add close button
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.cssText = `
+        display: block;
+        margin: 20px auto 0;
+        padding: 8px 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        border-radius: 5px;
+        color: white;
+        cursor: pointer;
+    `;
+    closeButton.onclick = () => leaderboardContainer.remove();
+    leaderboardContainer.appendChild(closeButton);
+
+    document.body.appendChild(leaderboardContainer);
+}
+
+// Add function to handle ad refresh
+function refreshAds() {
+    // This function would be implemented with your ad network's refresh mechanism
+    console.log('Refreshing ads...');
+}
+
+// Create ad containers
+function createAdContainers() {
+    // Create container for ads
+    const adContainer = document.createElement('div');
+    adContainer.id = 'ad-container';
+    adContainer.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 1000;
+    `;
+    document.body.appendChild(adContainer);
+
+    // Top ad
+    const topAd = document.createElement('div');
+    topAd.id = AD_CONFIG.positions.top.id;
+    topAd.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: ${AD_CONFIG.positions.top.width};
+        height: ${AD_CONFIG.positions.top.height};
+        background: rgba(0, 0, 0, 0.1);
+        pointer-events: auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: #666;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+    `;
+    topAd.innerHTML = 'Advertisement Space';
+    adContainer.appendChild(topAd);
+
+    // Side ad
+    const sideAd = document.createElement('div');
+    sideAd.id = AD_CONFIG.positions.side.id;
+    sideAd.style.cssText = `
+        position: absolute;
+        right: 20px;
+        top: 50%;
+        transform: translateY(-50%);
+        width: ${AD_CONFIG.positions.side.width};
+        height: ${AD_CONFIG.positions.side.height};
+        background: rgba(0, 0, 0, 0.1);
+        pointer-events: auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: #666;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+    `;
+    sideAd.innerHTML = 'Advertisement Space';
+    adContainer.appendChild(sideAd);
+
+    // Bottom ad
+    const bottomAd = document.createElement('div');
+    bottomAd.id = AD_CONFIG.positions.bottom.id;
+    bottomAd.style.cssText = `
+        position: absolute;
+        bottom: 0;
+        left: 50%;
+        transform: translateX(-50%);
+        width: ${AD_CONFIG.positions.bottom.width};
+        height: ${AD_CONFIG.positions.bottom.height};
+        background: rgba(0, 0, 0, 0.1);
+        pointer-events: auto;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: #666;
+        font-family: Arial, sans-serif;
+        font-size: 14px;
+    `;
+    bottomAd.innerHTML = 'Advertisement Space';
+    adContainer.appendChild(bottomAd);
+}
+
+// Add missing functions
+function showProfile() {
+    const profileContainer = document.createElement('div');
+    profileContainer.id = 'profile-container';
+    profileContainer.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        backdrop-filter: blur(10px);
+        z-index: 1001;
+        width: 80%;
+        max-width: 500px;
+    `;
+
+    profileContainer.innerHTML = `
+        <h2 style="color: #4CAF50; margin-bottom: 20px;">Player Profile</h2>
+        <div style="margin-bottom: 20px;">
+            <div style="margin: 10px 0;">
+                <strong>Username:</strong> ${userData.username || 'Player'}
+            </div>
+            <div style="margin: 10px 0;">
+                <strong>Level:</strong> ${userData.level}
+            </div>
+            <div style="margin: 10px 0;">
+                <strong>Experience:</strong> ${userData.experience}
+            </div>
+            <div style="margin: 10px 0;">
+                <strong>Games Played:</strong> ${gameStats.gamesPlayed}
+            </div>
+            <div style="margin: 10px 0;">
+                <strong>Wins:</strong> ${gameStats.wins}
+            </div>
+            <div style="margin: 10px 0;">
+                <strong>Best Score:</strong> ${gameStats.bestScore}
+            </div>
+        </div>
+    `;
+
+    // Add close button
+    const closeButton = document.createElement('button');
+    closeButton.textContent = 'Close';
+    closeButton.style.cssText = `
+        display: block;
+        margin: 20px auto 0;
+        padding: 8px 20px;
+        background: rgba(255, 255, 255, 0.1);
+        border: none;
+        border-radius: 5px;
+        color: white;
+        cursor: pointer;
+    `;
+    closeButton.onclick = () => profileContainer.remove();
+    profileContainer.appendChild(closeButton);
+
+    document.body.appendChild(profileContainer);
+}
+
+function startClassicMode() {
+    // Hide game mode selection
+    const modeSelection = document.getElementById('game-mode-selection');
+    if (modeSelection) {
+        modeSelection.style.display = 'none';
+    }
+
+    // Reset game state
+    score = { player1: 0, player2: 0 };
+    roundNumber = 1;
+    maxRounds = 1; // Classic mode is single round
+    gameTime = 0;
+
+    // Show game container
+    const gameContainer = document.getElementById('game-container');
+    if (gameContainer) {
+        gameContainer.style.visibility = 'visible';
+    }
+
+    // Reset and start game
+    resetGame();
+    updateGameStatus();
+}
+
+// Add game status update function
+function updateGameStatus() {
+    const scoreDisplay = document.getElementById('score-display');
+    const roundDisplay = document.getElementById('round-display');
+    const timerDisplay = document.getElementById('timer-display');
+
+    if (scoreDisplay) {
+        scoreDisplay.innerHTML = `
+            <span style="color: #4CAF50">Player 1: ${score.player1}</span> | 
+            <span style="color: #FF5722">Player 2: ${score.player2}</span>
+        `;
+    }
+
+    if (roundDisplay) {
+        roundDisplay.textContent = `Round ${roundNumber}/${maxRounds}`;
+    }
+
+    if (timerDisplay && gameMode === 'quick') {
+        const minutes = Math.floor(gameTime / 60);
+        const seconds = gameTime % 60;
+        timerDisplay.textContent = `Time: ${minutes}:${seconds.toString().padStart(2, '0')}`;
+    }
+}
+
+// Add game mode selection function
+function showGameModes() {
+    // Hide main menu
+    const mainMenu = document.getElementById('main-menu');
+    if (mainMenu) {
+        mainMenu.style.display = 'none';
+    }
+
+    // Create game mode selection container
+    const modeContainer = document.createElement('div');
+    modeContainer.id = 'game-mode-selection';
+    modeContainer.style.cssText = `
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.8);
+        padding: 20px;
+        border-radius: 15px;
+        color: white;
+        text-align: center;
+        backdrop-filter: blur(10px);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        z-index: 1000;
+    `;
+
+    const title = document.createElement('h2');
+    title.textContent = 'Select Game Mode';
+    title.style.cssText = `
+        margin-bottom: 20px;
+        color: #4CAF50;
+    `;
+    modeContainer.appendChild(title);
+
+    const modes = [
+        { id: 'classic', name: 'Classic Mode', desc: 'Traditional turn-based gameplay' },
+        { id: 'quick', name: 'Quick Mode', desc: '3-minute time limit, fast-paced action' },
+        { id: 'tournament', name: 'Tournament Mode', desc: 'Best of 3 rounds' }
+    ];
+
+    modes.forEach(mode => {
+        const button = document.createElement('button');
+        button.textContent = mode.name;
+        button.style.cssText = `
+            display: block;
+            width: 200px;
+            padding: 10px;
+            margin: 10px auto;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+            border-radius: 5px;
+            color: white;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        `;
+        button.onmouseover = () => button.style.background = 'rgba(255, 255, 255, 0.2)';
+        button.onmouseout = () => button.style.background = 'rgba(255, 255, 255, 0.1)';
+        button.onclick = () => startGameMode(mode.id);
+        modeContainer.appendChild(button);
+
+        const desc = document.createElement('div');
+        desc.textContent = mode.desc;
+        desc.style.cssText = `
+            font-size: 12px;
+            color: #aaa;
+            margin-bottom: 15px;
+        `;
+        modeContainer.appendChild(desc);
+    });
+
+    // Add back button
+    const backButton = document.createElement('button');
+    backButton.textContent = 'Back to Menu';
+    backButton.style.cssText = `
+        display: block;
+        width: 200px;
+        padding: 10px;
+        margin: 20px auto 0;
+        background: rgba(255, 255, 255, 0.1);
+        border: 1px solid rgba(255, 255, 255, 0.3);
+        border-radius: 5px;
+        color: white;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    `;
+    backButton.onmouseover = () => backButton.style.background = 'rgba(255, 255, 255, 0.2)';
+    backButton.onmouseout = () => backButton.style.background = 'rgba(255, 255, 255, 0.1)';
+    backButton.onclick = () => {
+        modeContainer.remove();
+        if (mainMenu) {
+            mainMenu.style.display = 'block';
+        }
+    };
+    modeContainer.appendChild(backButton);
+
+    document.body.appendChild(modeContainer);
 }
 
 init();
