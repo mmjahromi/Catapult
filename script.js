@@ -563,7 +563,7 @@ function drawProjectile(x, y) {
     ctx.closePath();
 }
 
-// Update the fireProjectile function to use simplified validation
+// Update the fireProjectile function to include wind effects on the projectile trajectory
 function fireProjectile(startX, startY, angle, power, callback) {
     try {
         // Basic validation
@@ -582,6 +582,13 @@ function fireProjectile(startX, startY, angle, power, callback) {
         let x = startX;
         let y = startY;
 
+        console.log('Initial conditions:', {
+            wind: wind,
+            initialVelocityX: velocityX,
+            angle: angle,
+            power: power
+        });
+
         function animate() {
             ctx.clearRect(0, 0, canvas.width, canvas.height);
             
@@ -592,6 +599,28 @@ function fireProjectile(startX, startY, angle, power, callback) {
             drawPowerMeter();
             drawExplosion();
 
+            // Apply much stronger wind effect
+            const windEffect = wind * 0.2; // Significantly increased wind effect
+            
+            // Check if bullet is moving in the same direction as wind
+            const isMovingWithWind = (wind > 0 && velocityX > 0) || (wind < 0 && velocityX < 0);
+            
+            if (isMovingWithWind) {
+                // Same direction - accelerate
+                velocityX += windEffect;
+                console.log('Moving with wind - Accelerating:', {
+                    windEffect: windEffect,
+                    newVelocityX: velocityX
+                });
+            } else {
+                // Opposite direction - push in opposite direction
+                velocityX -= windEffect;
+                console.log('Moving against wind - Pushing back:', {
+                    windEffect: windEffect,
+                    newVelocityX: velocityX
+                });
+            }
+            
             x += velocityX;
             y += velocityY;
             velocityY += gravity;
